@@ -152,7 +152,10 @@ export function RegionalTable({
                 >
                   Air Quality Band
                 </th>
-                {renderSortHeader('1h PM2.5', 'pm25_1h')}
+                {renderSortHeader(
+                  snapshot.scenarioId === 'live' ? 'PM2.5 Sub' : '1h PM2.5',
+                  'pm25_1h'
+                )}
                 {renderSortHeader('24h PM2.5', 'pm25_24h')}
                 {renderSortHeader('PM10', 'pm10_24h')}
                 {renderSortHeader('O₃ (8h)', 'o3_8h_max')}

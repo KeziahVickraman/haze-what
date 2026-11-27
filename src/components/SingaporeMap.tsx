@@ -370,7 +370,12 @@ export function SingaporeMap({
             </span>
           )}
           <span className="font-mono text-slate-400 tabular-nums">
-            Metric: {metricView === 'psi24h' ? '24-hr PSI' : '1-hr PM2.5 (µg/m³)'}
+            Metric:{' '}
+            {metricView === 'psi24h'
+              ? '24-hr PSI'
+              : snapshot.scenarioId === 'live'
+              ? '24-hr PM2.5 (µg/m³)'
+              : '1-hr PM2.5 (µg/m³)'}
           </span>
         </div>
       </div>

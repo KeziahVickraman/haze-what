@@ -95,7 +95,11 @@ export function NationalOverviewCard({
 
         <div className="mb-5">
           <div className="text-xs text-slate-500 mb-1">
-            {metricView === 'psi24h' ? '24-hour PSI' : '1-hour PM2.5'}
+            {metricView === 'psi24h'
+              ? '24-hour PSI'
+              : snapshot.scenarioId === 'live'
+              ? '24-hour PM2.5'
+              : '1-hour PM2.5'}
           </div>
           <div className="flex items-baseline gap-3 flex-wrap">
             <span className="font-mono text-4xl sm:text-5xl font-bold tracking-tight text-slate-900 tabular-nums">
@@ -147,12 +151,22 @@ export function NationalOverviewCard({
           <dl className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-3.5">
             <div>
               <dt className="text-xs text-slate-500">
-                {metricView === 'psi24h' ? '1-hr PM2.5' : '24-hr PSI'}
+                {metricView === 'psi24h'
+                  ? snapshot.scenarioId === 'live'
+                    ? '1-hr NO₂ (max)'
+                    : '1-hr PM2.5'
+                  : '24-hr PSI'}
               </dt>
               <dd className="font-mono text-base font-semibold text-slate-900 tabular-nums mt-0.5">
                 {metricView === 'psi24h' ? (
                   <>
-                    {activeReadings ? activeReadings.pm25_1h : avg((id) => snapshot.regions[id].pm25_1h)}
+                    {snapshot.scenarioId === 'live'
+                      ? activeReadings
+                        ? activeReadings.no2_1h_max
+                        : avg((id) => snapshot.regions[id].no2_1h_max)
+                      : activeReadings
+                      ? activeReadings.pm25_1h
+                      : avg((id) => snapshot.regions[id].pm25_1h)}
                     <span className="text-xs font-normal text-slate-500 ml-1">µg/m³</span>
                   </>
                 ) : (

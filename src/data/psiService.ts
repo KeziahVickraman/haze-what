@@ -1,11 +1,13 @@
 import {
   HourlyDataPoint,
   NeaDataGovPsiResponse,
+  NeaPsiItem,
   PollutantReadings,
   PsiSnapshot,
   RegionId,
   RegionMetadata,
   ScenarioId,
+  ServerPsiApiResponse,
 } from '../types/psi';
 
 export const SINGAPORE_REGIONS: RegionMetadata[] = [
@@ -82,24 +84,29 @@ export interface ScenarioOption {
 
 export const SCENARIO_OPTIONS: ScenarioOption[] = [
   {
+    id: 'live',
+    label: 'Live NEA Feed',
+    shortDescription: 'Real-time data from data.gov.sg via /api/psi',
+  },
+  {
     id: 'current',
     label: 'Clear Monsoon',
-    shortDescription: 'Typical inter-monsoon baseline (Good to low Moderate)',
+    shortDescription: 'Simulated inter-monsoon baseline (Good to low Moderate)',
   },
   {
     id: 'moderate-haze',
     label: 'Moderate Haze',
-    shortDescription: 'Southwest wind drift carrying mild smoke haze',
+    shortDescription: 'Simulated southwest wind drift carrying mild smoke haze',
   },
   {
     id: 'unhealthy-haze',
     label: 'Unhealthy Episode',
-    shortDescription: 'Sustained transboundary smoke plume across West & Central',
+    shortDescription: 'Simulated sustained transboundary smoke plume across West & Central',
   },
   {
     id: 'severe-haze',
     label: 'Severe Haze Alert',
-    shortDescription: 'Peak transboundary haze event (2015-grade conditions)',
+    shortDescription: 'Simulated peak transboundary haze event',
   },
 ];
 
@@ -114,7 +121,6 @@ function buildHourlySeries(
   for (let i = 0; i < 24; i++) {
     const dt = new Date(baseDate.getTime() + i * 3600 * 1000);
     const hourStr = `${String(i).padStart(2, '0')}:00`;
-    // Realistic diurnal curve: slightly higher mid-afternoon/evening drift
     const phase = Math.sin(((i - 6) / 24) * Math.PI * 2);
     const fineDetail = Math.cos((i / 6) * Math.PI) * 0.25;
 
@@ -147,7 +153,10 @@ function buildHourlySeries(
   return hours;
 }
 
-const SCENARIO_DATA: Record<ScenarioId, Omit<PsiSnapshot, 'updatedAtIso' | 'updatedAtDisplay'>> = {
+const SCENARIO_DATA: Record<
+  Exclude<ScenarioId, 'live'>,
+  Omit<PsiSnapshot, 'updatedAtIso' | 'updatedAtDisplay'>
+> = {
   current: {
     scenarioId: 'current',
     scenarioLabel: 'Clear Monsoon',
@@ -280,7 +289,16 @@ export function formatSgtTimestamp(date: Date): string {
   );
 }
 
-export function getSnapshotForScenario(scenarioId: ScenarioId): PsiSnapshot {
+function formatSgtHour(isoString: string): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: 'Asia/Singapore',
+  }).format(new Date(isoString));
+}
+
+export function getSnapshotForScenario(scenarioId: Exclude<ScenarioId, 'live'>): PsiSnapshot {
   const base = SCENARIO_DATA[scenarioId];
   const now = new Date();
   return {
@@ -290,18 +308,14 @@ export function getSnapshotForScenario(scenarioId: ScenarioId): PsiSnapshot {
   };
 }
 
-/**
- * Simulates a fresh station poll with subtle realistic sensor variance
- * while keeping the active scenario band intact.
- */
 export function simulateRefreshSnapshot(prev: PsiSnapshot): PsiSnapshot {
   const now = new Date();
   const nextRegions = { ...prev.regions };
 
   (Object.keys(nextRegions) as RegionId[]).forEach((regionId) => {
     const cur = nextRegions[regionId];
-    const deltaPsi = Math.floor(Math.random() * 5) - 2; // -2 to +2
-    const deltaPm = Math.floor(Math.random() * 7) - 3; // -3 to +3
+    const deltaPsi = Math.floor(Math.random() * 5) - 2;
+    const deltaPm = Math.floor(Math.random() * 7) - 3;
     nextRegions[regionId] = {
       ...cur,
       psi24h: Math.max(10, cur.psi24h + deltaPsi),
@@ -311,7 +325,6 @@ export function simulateRefreshSnapshot(prev: PsiSnapshot): PsiSnapshot {
     };
   });
 
-  // Update final hourly point to match live refreshed values
   const nextTrend = prev.hourlyTrend.map((point, idx) => {
     if (idx !== prev.hourlyTrend.length - 1) return point;
     return {
@@ -335,50 +348,111 @@ export function simulateRefreshSnapshot(prev: PsiSnapshot): PsiSnapshot {
   };
 }
 
-/**
- * Adapter ready for future live NEA data.gov.sg v2 API connection:
- * fetch('https://api-open.data.gov.sg/v2/real-time/api/psi')
- *   .then(r => r.json())
- *   .then(json => mapNeaApiResponseToSnapshot(json))
- */
-export function mapNeaApiResponseToSnapshot(
-  payload: NeaDataGovPsiResponse,
-  pm25OneHourly?: Record<RegionId, number>,
-  existingTrend: HourlyDataPoint[] = []
-): PsiSnapshot {
-  const latest = payload.data.items[0];
-  const r = latest.readings;
+function mapItemsToHourlyTrend(items: NeaPsiItem[]): HourlyDataPoint[] {
+  const regionIds: RegionId[] = ['north', 'south', 'east', 'west', 'central'];
+  return items.map((item) => {
+    const regions = regionIds.reduce((acc, id) => {
+      acc[id] = {
+        psi24h: item.readings.psi_twenty_four_hourly[id] ?? 0,
+        pm25_1h: item.readings.pm25_twenty_four_hourly[id] ?? 0,
+      };
+      return acc;
+    }, {} as Record<RegionId, { psi24h: number; pm25_1h: number }>);
+
+    return {
+      hourLabel: formatSgtHour(item.timestamp),
+      isoTimestamp: item.timestamp,
+      regions,
+    };
+  });
+}
+
+function mapSingleItemToRegions(item: NeaPsiItem): Record<RegionId, PollutantReadings> {
+  const r = item.readings;
   const regionIds: RegionId[] = ['north', 'south', 'east', 'west', 'central'];
 
-  const regions = regionIds.reduce((acc, id) => {
+  return regionIds.reduce((acc, id) => {
     acc[id] = {
-      psi24h: r.psi_twenty_four_hourly[id],
-      pm25_1h: pm25OneHourly ? pm25OneHourly[id] : r.pm25_twenty_four_hourly[id],
-      pm25_24h: r.pm25_twenty_four_hourly[id],
-      pm10_24h: r.pm10_twenty_four_hourly[id],
-      so2_24h: r.so2_twenty_four_hourly[id],
-      co_8h_max: r.co_eight_hour_max[id],
-      o3_8h_max: r.o3_eight_hour_max[id],
-      no2_1h_max: r.no2_one_hour_max[id],
+      psi24h: r.psi_twenty_four_hourly[id] ?? 0,
+      pm25_1h: r.pm25_twenty_four_hourly[id] ?? 0,
+      pm25_24h: r.pm25_twenty_four_hourly[id] ?? 0,
+      pm10_24h: r.pm10_twenty_four_hourly[id] ?? 0,
+      so2_24h: r.so2_twenty_four_hourly[id] ?? 0,
+      co_8h_max: r.co_eight_hour_max[id] ?? 0,
+      o3_8h_max: r.o3_eight_hour_max[id] ?? 0,
+      no2_1h_max: r.no2_one_hour_max[id] ?? 0,
     };
     return acc;
   }, {} as Record<RegionId, PollutantReadings>);
+}
 
+export async function fetchLivePsiSnapshot(): Promise<PsiSnapshot> {
+  const response = await fetch('/api/psi', {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+  });
+
+  if (!response.ok) {
+    throw new Error(`API returned status ${response.status}`);
+  }
+
+  const payload = (await response.json()) as ServerPsiApiResponse;
+  if (!payload.ok || !payload.latest) {
+    throw new Error(payload.error || 'No live PSI readings returned');
+  }
+
+  const updatedDate = new Date(payload.latest.updatedTimestamp || payload.latest.timestamp);
+  const regions = mapSingleItemToRegions(payload.latest);
+  const hourlyTrend = mapItemsToHourlyTrend(payload.items.length ? payload.items : [payload.latest]);
+
+  const maxPsi = Math.max(
+    regions.north.psi24h,
+    regions.south.psi24h,
+    regions.east.psi24h,
+    regions.west.psi24h,
+    regions.central.psi24h
+  );
+
+  // Estimate visibility cleanly from current PSI band when live endpoint doesn't provide meteorological visibility
+  const estimatedVisibility =
+    maxPsi <= 50 ? 12.0 : maxPsi <= 100 ? 7.5 : maxPsi <= 200 ? 3.8 : 1.5;
+
+  return {
+    scenarioId: 'live',
+    scenarioLabel: 'Live NEA Feed',
+    updatedAtIso: payload.latest.updatedTimestamp,
+    updatedAtDisplay: formatSgtTimestamp(updatedDate),
+    wind: {
+      directionLabel: 'NE',
+      bearingDeg: 42,
+      speedKmh: 12,
+      monsoonPhase: 'data.gov.sg Live PSI',
+      visibilityKm: estimatedVisibility,
+    },
+    regions,
+    hourlyTrend,
+  };
+}
+
+export function mapNeaApiResponseToSnapshot(
+  payload: NeaDataGovPsiResponse
+): PsiSnapshot {
+  const latest = payload.data.items[0];
   const updatedDate = new Date(latest.updatedTimestamp);
 
   return {
-    scenarioId: 'current',
+    scenarioId: 'live',
     scenarioLabel: 'Live NEA Feed',
     updatedAtIso: latest.updatedTimestamp,
     updatedAtDisplay: formatSgtTimestamp(updatedDate),
     wind: {
-      directionLabel: 'SW',
-      bearingDeg: 220,
+      directionLabel: 'NE',
+      bearingDeg: 42,
       speedKmh: 12,
-      monsoonPhase: 'Live Station Feed',
+      monsoonPhase: 'data.gov.sg Live PSI',
       visibilityKm: 10.0,
     },
-    regions,
-    hourlyTrend: existingTrend,
+    regions: mapSingleItemToRegions(latest),
+    hourlyTrend: mapItemsToHourlyTrend(payload.data.items),
   };
 }

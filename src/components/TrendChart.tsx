@@ -140,7 +140,13 @@ export function TrendChart({ snapshot, selectedRegion, metricView }: TrendChartP
       <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
         <div>
           <h2 className="font-display text-lg font-semibold text-slate-900">
-            24-Hour {metricView === 'psi24h' ? 'PSI' : '1-hr PM2.5'} Trend
+            24-Hour{' '}
+            {metricView === 'psi24h'
+              ? 'PSI'
+              : snapshot.scenarioId === 'live'
+              ? '24-hr PM2.5'
+              : '1-hr PM2.5'}{' '}
+            Trend
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
             {compareAll
